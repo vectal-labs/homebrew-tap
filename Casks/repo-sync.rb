@@ -24,23 +24,61 @@ cask "repo-sync" do
         end
       end
     end
-  end
+    module UninstallPhase
+      def uninstall_phase(upgrade: false, reinstall: false, command: SystemCommand, **options)
+        return super if upgrade || reinstall
 
-  version "0.1.2"
+        updater_plist = File.expand_path("~/Library/LaunchAgents/com.vectal-labs.repo-sync.updates.plist")
+        sync_plist = File.expand_path("~/Library/LaunchAgents/com.vectal-labs.repo-sync.plist")
+        lock = nil
+        begin
+          # repo-sync uninstall removes both plists before calling Homebrew,
+          # while holding this lock itself. Direct brew uninstall acquires it.
+          if File.exist?(updater_plist) || File.exist?(sync_plist)
+            require "fileutils"
+            lock_path = File.expand_path("~/Library/Caches/repo-sync/update.lock")
+            FileUtils.mkdir_p(File.dirname(lock_path))
+            lock = File.open(lock_path, File::RDWR | File::CREAT | File::NOFOLLOW, 0600)
+            raise "A repo-sync update is in progress; retry uninstall when it finishes" unless lock.flock(File::LOCK_EX | File::LOCK_NB)
+          end
+          invoke = ->(executable, **args) { command.run!(executable, **args) }
+          RepoSyncCaskLifecycle.stop(invoke, "gui/#{Process.uid}/com.vectal-labs.repo-sync.updates")
+          File.unlink(updater_plist) if File.file?(updater_plist)
+          result = super(upgrade: upgrade, reinstall: reinstall, command: command, **options)
+          # Package removal follows preflight. Retain the lock on the artifact
+          # until Homebrew exits so another updater cannot restart the daemon.
+          @repo_sync_uninstall_lock = lock
+          lock = nil
+          result
+        ensure
+          lock&.close
+        end
+      end
+    end
+  end
+  uninstall_preflight do
+    RepoSyncCaskLifecycle.stop(method(:system_command), "gui/#{Process.uid}/com.vectal-labs.repo-sync")
+  end
+  # Homebrew passes upgrade/reinstall flags to artifacts, but drops them
+  # before ordinary preflight blocks. Extend only this cask's artifact.
+  artifacts.find { |artifact| artifact.is_a?(::Cask::Artifact::PreflightBlock) }
+           .extend(RepoSyncCaskLifecycle::UninstallPhase)
+
+  version "0.1.3"
 
   on_macos do
     on_arm do
-      sha256 "eb7875cdd3036402dcd7ed06eeb970d89bac6aaa105bde07d703883717173559"
+      sha256 "6fec904e47108328d7e986158d1b57418ad91bedb958f98a192ecffc830b8d0a"
       url "https://github.com/vectal-labs/repo-sync/releases/download/v#{version}/repo-sync_#{version}_darwin_arm64.tar.gz"
     end
     on_intel do
-      sha256 "88577f762a5492e52ee1c35677e5e00fb1b80e90247854dfac1c3bdf5f91f1a9"
+      sha256 "e8a8a04bfd908a176d87c0e308ded458fac13200c347582be20540370f5f0124"
       url "https://github.com/vectal-labs/repo-sync/releases/download/v#{version}/repo-sync_#{version}_darwin_amd64.tar.gz"
     end
   end
 
   name "repo-sync"
-  desc "Keeps your Git repositories in sync automatically on macOS"
+  desc "Automatically syncs shared team docs and context through Git on macOS"
   homepage "https://github.com/vectal-labs/repo-sync"
 
   livecheck do
@@ -64,20 +102,25 @@ cask "repo-sync" do
       # Keep the user's config and refresh older, versioned binary paths.
       require "json"
       arguments = JSON.parse(system_command("/usr/bin/plutil", args: ["-extract", "ProgramArguments", "json", "-o", "-", plist]).stdout)
-      arguments[0] = "#{staged_path}/repo-sync"
+      arguments[0] = "#{HOMEBREW_PREFIX}/bin/repo-sync"
       system_command "/usr/bin/plutil", args: ["-replace", "ProgramArguments", "-json", JSON.generate(arguments), plist]
       system_command "/bin/launchctl", args: ["bootstrap", domain, plist], timeout: 10
       system_command "/bin/launchctl", args: ["print", "#{domain}/com.vectal-labs.repo-sync"], timeout: 5
+      config_index = arguments.index { |argument| argument == "--config" || argument.start_with?("--config=") }
+      config = if config_index
+        argument = arguments[config_index]
+        argument == "--config" ? arguments.fetch(config_index + 1) : argument.delete_prefix("--config=")
+      else
+        File.expand_path("~/Library/Application Support/repo-sync/config.json")
+      end
+      # Existing updater registrations must survive an upgrade they started.
+      system_command "#{staged_path}/repo-sync", args: ["install-updater", "--config", config], timeout: 30
     end
-  end
-
-  uninstall_preflight do
-    # Homebrew also runs this during upgrade. Keep the plist for reloading.
-    RepoSyncCaskLifecycle.stop(method(:system_command), "gui/#{Process.uid}/com.vectal-labs.repo-sync")
   end
 
   zap trash: [
       "~/Library/LaunchAgents/com.vectal-labs.repo-sync.plist",
+      "~/Library/LaunchAgents/com.vectal-labs.repo-sync.updates.plist",
       "~/Library/Application Support/repo-sync",
       "~/Library/Logs/repo-sync",
       "~/Library/Caches/repo-sync",
