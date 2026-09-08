@@ -45,6 +45,9 @@ cask "repo-sync" do
           RepoSyncCaskLifecycle.stop(invoke, "gui/#{Process.uid}/com.vectal-labs.repo-sync.updates")
           File.unlink(updater_plist) if File.file?(updater_plist)
           result = super(upgrade: upgrade, reinstall: reinstall, command: command, **options)
+          # This helper only removes unchanged managed skill copies. It uses
+          # its own lock because this phase already holds the update lock.
+          invoke.call cask.staged_path.join("repo-sync").to_s, args: ["skill", "uninstall"], timeout: 30
           # Package removal follows preflight. Retain the lock on the artifact
           # until Homebrew exits so another updater cannot restart the daemon.
           @repo_sync_uninstall_lock = lock
@@ -64,15 +67,15 @@ cask "repo-sync" do
   artifacts.find { |artifact| artifact.is_a?(::Cask::Artifact::PreflightBlock) }
            .extend(RepoSyncCaskLifecycle::UninstallPhase)
 
-  version "0.1.3"
+  version "0.1.4"
 
   on_macos do
     on_arm do
-      sha256 "6fec904e47108328d7e986158d1b57418ad91bedb958f98a192ecffc830b8d0a"
+      sha256 "30cfebd05af7ab4bf2212d8e01fff691debc1d7b43b9d4d2173843da1807bb2c"
       url "https://github.com/vectal-labs/repo-sync/releases/download/v#{version}/repo-sync_#{version}_darwin_arm64.tar.gz"
     end
     on_intel do
-      sha256 "e8a8a04bfd908a176d87c0e308ded458fac13200c347582be20540370f5f0124"
+      sha256 "755acd0caa476c97966a5bb6560732e3b90bf7b85ac153100f541a6e1e1ba1c7"
       url "https://github.com/vectal-labs/repo-sync/releases/download/v#{version}/repo-sync_#{version}_darwin_amd64.tar.gz"
     end
   end
@@ -116,6 +119,9 @@ cask "repo-sync" do
       # Existing updater registrations must survive an upgrade they started.
       system_command "#{staged_path}/repo-sync", args: ["install-updater", "--config", config], timeout: 30
     end
+    # Refresh only previously installed, unchanged skills. No receipt is
+    # a no-op, including fresh installations that have not run setup.
+    system_command "#{staged_path}/repo-sync", args: ["skill", "refresh"], timeout: 30
   end
 
   zap trash: [
