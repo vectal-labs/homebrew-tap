@@ -67,15 +67,15 @@ cask "repo-sync" do
   artifacts.find { |artifact| artifact.is_a?(::Cask::Artifact::PreflightBlock) }
            .extend(RepoSyncCaskLifecycle::UninstallPhase)
 
-  version "0.1.4"
+  version "0.1.5"
 
   on_macos do
     on_arm do
-      sha256 "30cfebd05af7ab4bf2212d8e01fff691debc1d7b43b9d4d2173843da1807bb2c"
+      sha256 "3b6978272627a95eeb1c229b33d02774961663dcd57f4dc8ee69d1788f3430c2"
       url "https://github.com/vectal-labs/repo-sync/releases/download/v#{version}/repo-sync_#{version}_darwin_arm64.tar.gz"
     end
     on_intel do
-      sha256 "755acd0caa476c97966a5bb6560732e3b90bf7b85ac153100f541a6e1e1ba1c7"
+      sha256 "6d55177d312a7f3e0979d27dbafb4a2b413652b11a3d734774347ea492a22366"
       url "https://github.com/vectal-labs/repo-sync/releases/download/v#{version}/repo-sync_#{version}_darwin_amd64.tar.gz"
     end
   end
